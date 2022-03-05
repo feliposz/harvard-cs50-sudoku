@@ -5,6 +5,7 @@
  * Problem Set 4
  *
  * Implements the game of Sudoku.
+ * (Hacker edition.)
  ***************************************************************************/
 
 #include "sudoku.h"
@@ -88,6 +89,7 @@ void check_win(void);
 void check_valid(int n);
 void undo_last(void);
 void show_time(void);
+void hint(void);
 
 /*
  * Main driver for the game.
@@ -257,6 +259,9 @@ main(int argc, char *argv[])
                 g.show_time = !g.show_time;
                 show_time();
                 show_cursor();
+                break;
+            case 'H':
+                hint();
                 break;
         }
 
@@ -497,6 +502,71 @@ void show_time(void)
 }
 
 /*
+ * Try to fill a position in the game for the user
+ */
+
+void hint(void)
+{
+    // create a table for possible numbers for each position
+    bool possible[9][9][9];
+    
+    // fill table with true for empty positions and false for taken positions
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {
+            for (int n = 0; n < 9; n++) {
+                possible[y][x][n] = (g.board[y][x] == 0);
+            }
+        }
+    }
+    
+    // check filled positions and mark not possible on empty ones
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {
+            int num = g.board[y][x] - 1; //adjust for matrix index
+            if (num >= 0) {
+                // mark as not possible for column
+                for (int y2 = 0; y2 < 9; y2++) {
+                    possible[y2][x][num] = false;
+                }
+                // mark as not possible for row
+                for (int x2 = 0; x2 < 9; x2++) {
+                    possible[y][x2][num] = false;
+                }
+                // mark as not possible for square
+                for (int pos = 0; pos < 9; pos++) {
+                    int posy = (y / 3) * 3 + (pos / 3);
+                    int posx = (x / 3) * 3 + (pos % 3);
+                    possible[posy][posx][num] = false;
+                }
+            }
+        }
+    }
+
+    // try to fill a position
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {
+            int count_possibles = 0, num = -1;
+            for (int n = 0; n < 9; n++) { // count how many possible numbers in this position
+                if (possible[y][x][n]) {
+                    count_possibles++;
+                    num = n;
+                }
+            }
+            if (count_possibles == 1) { // if only one is possible, fill it
+                g.y = y;
+                g.x = x;
+                change_number(num+1);
+                draw_numbers();
+                show_cursor();
+                return;
+            }
+        }
+    }
+
+    //TODO: Current version can only find solutions for simples puzzles
+}
+
+/*
  * Draw's the game's board.
  */
 
@@ -569,7 +639,7 @@ draw_borders(void)
     mvaddstr(0, (maxx - strlen(header)) / 2, header);
 
     // draw footer
-    mvaddstr(maxy-1, 1, "[N]ew Game   [R]estart Game");
+    mvaddstr(maxy-1, 1, "[N]ew Game   [R]estart Game   [H]int");
     mvaddstr(maxy-1, maxx-13, "[Q]uit Game");
 
     // disable color if possible (else b&w highlighting)
