@@ -35,6 +35,12 @@ struct
     // the game's board
     int board[9][9];
 
+    // a table indicating witch cells are blocked for change
+    bool blocked[9][9];
+    
+    // a table indicating witch cells are invalid in the board
+    bool valid[9][9];
+
     // the board's number
     int number;
 
@@ -43,6 +49,21 @@ struct
 
     // the cursor's current location between (0,0) and (8,8)
     int y, x;
+    
+    // indicate wether the game has been won
+    bool is_won;
+    
+    // if user has made changes
+    bool has_undo;
+    
+    // position of last change and it's value;
+    int undo_value, undo_y, undo_x;
+    
+    // time game has started
+    time_t start_time;
+    time_t end_time;
+    
+    bool show_time;
 } g;
 
 
@@ -61,7 +82,12 @@ void show_banner(char *b);
 void show_cursor(void);
 void shutdown(void);
 bool startup(void);
-
+void change_number(int n);
+void clear_number(void);
+void check_win(void);
+void check_valid(int n);
+void undo_last(void);
+void show_time(void);
 
 /*
  * Main driver for the game.
@@ -145,6 +171,8 @@ main(int argc, char *argv[])
     }
     redraw_all();
 
+    g.show_time = false;
+    
     // let the user play!
     int ch;
     do
@@ -157,6 +185,9 @@ main(int argc, char *argv[])
 
         // capitalize input to simplify cases
         ch = toupper(ch);
+
+        show_time();
+        show_cursor();
 
         // process user's input
         switch (ch)
@@ -181,10 +212,51 @@ main(int argc, char *argv[])
                     return 6;
                 }
                 break;
-
             // let user manually redraw screen with ctrl-L
             case CTRL('l'):
                 redraw_all();
+                break;
+            case KEY_DOWN:
+                g.y = (g.y + 1 + 9) % 9;
+                show_cursor();
+                break;
+            case KEY_UP:
+                g.y = (g.y - 1 + 9) % 9;
+                show_cursor();
+                break;
+            case KEY_LEFT:
+                g.x = (g.x - 1 + 9) % 9;
+                show_cursor();
+                break;
+            case KEY_RIGHT:
+                g.x = (g.x + 1 + 9) % 9;
+                show_cursor();
+                break;
+            case '1':
+            case '2':
+            case '3':
+            case '4':
+            case '5':
+            case '6':
+            case '7':
+            case '8':
+            case '9':
+                change_number(ch - '0');
+                break;
+            case '0':
+            case '.':
+            case KEY_DC:
+            case KEY_BACKSPACE:
+                clear_number();
+                break;
+            case 'U':
+            case CTRL('z'):
+                undo_last();
+                break;
+            case 'T':
+                g.show_time = !g.show_time;
+                show_time();
+                show_cursor();
                 break;
         }
 
@@ -206,6 +278,223 @@ main(int argc, char *argv[])
     return 0;
 }
 
+/*
+ * Insert the given number in the board at the cursor's position.
+ */
+
+void change_number(int n)
+{
+    if (g.is_won)
+        return;
+
+    if (!g.blocked[g.y][g.x]) {
+        //set undo data before change
+        g.has_undo = true;
+        g.undo_value = g.board[g.y][g.x];
+        g.undo_y = g.y;
+        g.undo_x = g.x;
+        
+        // change board according to user input
+        g.board[g.y][g.x] = n;
+       
+        check_valid(n);
+        check_win();
+        draw_numbers();
+    } else {
+        show_banner("You cannot change this number.");
+    }
+    show_cursor();
+}
+
+/*
+ * Clear the number at the cursor's position;
+ */
+
+void clear_number(void)
+{
+    if (g.is_won)
+        return;
+
+    if (!g.blocked[g.y][g.x]) {
+        // set undo data before change
+        g.has_undo = true;
+        g.undo_value = g.board[g.y][g.x];
+        g.undo_y = g.y;
+        g.undo_x = g.x;
+
+        // clear value and make cell valid
+        g.board[g.y][g.x] = 0;
+        g.valid[g.y][g.x] = true;
+ 
+        hide_banner();
+        draw_numbers();
+    } else {
+        show_banner("You cannot erase this number.");
+    }
+    show_cursor();
+}
+
+/*
+ * Check if the user has won the game
+ */
+void check_win(void)
+{
+    // start assuming the game is won, if not, 
+    g.is_won = true;
+
+    // check if there are unfilled cells
+    for (int y = 0; y < 9; y++) {
+        for (int x = 0; x < 9; x++) {            
+            if (g.board[y][x] == 0) {
+                g.is_won = false;
+                return;
+            }
+        }
+    }
+    
+    // check for repeats in a row
+    for (int y = 0; y < 9; y++) {
+        for (int x1 = 0; x1 < 9; x1++) {
+            for (int x2 = x1 + 1; x2 < 9; x2++) {
+                if (g.board[y][x1] == g.board[y][x2]) {
+                    g.is_won = false;
+                    return;
+                }
+            }
+        }
+    }
+
+    // check for repeats in a column
+    for (int x = 0; x < 9; x++) {
+        for (int y1 = 0; y1 < 9; y1++) {
+            for (int y2 = y1 + 1; y2 < 9; y2++) {
+                if (g.board[y1][x] == g.board[y2][x]) {
+                    g.is_won = false;
+                    return;
+                }
+            }
+        }
+    }
+
+    // check for repeats inside a square
+    for (int cell = 0; cell < 9; cell++) {
+        //  cell is treated as linear [0..8] and converted to y,x coordinates
+        int cellx = (cell % 3) * 3;
+        int celly = (cell / 3) * 3;
+        for (int pos1 = 0; pos1 < 9; pos1++) {
+            //  do the same for pos1 and pos2 (below) and add cell coordinates
+            int pos1x = pos1 % 3 + cellx;
+            int pos1y = pos1 / 3 + celly;
+            for (int pos2 = pos1 + 1; pos2 < 9; pos2++) {
+                int pos2x = pos2 % 3 + cellx;
+                int pos2y = pos2 / 3 + celly;
+                if (g.board[pos1y][pos1x] == g.board[pos2y][pos2x]) {
+                    g.is_won = false;
+                    return;
+                }
+            }
+        }
+    }
+    
+    // if code hasn't returned, game is won: congratulate the user
+    show_banner("CONGRATULATIONS! You have won!");
+    g.end_time = time(NULL);
+    show_cursor();
+}
+
+/*
+ * Verifies if number entered is valid, i.e.,
+ * it's not repeated in the column, row or square.
+ */
+
+void check_valid(int n)
+{
+    //TODO: Implement check for valid number change
+    bool is_valid = true;
+    
+    // check if n is repeated in cursor row
+    for (int x = 0; x < 9; x++) {            
+        if (x != g.x && g.board[g.y][x] == n) { // skip cursor position
+            is_valid = false;
+            //g.valid[g.y][x] = false;
+        }
+    }
+
+    // check if n is repeated in cursor column
+    for (int y = 0; y < 9; y++) {            
+        if (y != g.y && g.board[y][g.x] == n) { // skip cursor position
+            is_valid = false;
+            //g.valid[y][g.x] = false;
+        }
+    }
+
+    // check for repeats inside a square
+
+    //  cell is treated as linear [0..8] and converted to y,x coordinates
+    int celly = (g.y / 3) * 3;
+    int cellx = (g.x / 3) * 3;
+    for (int pos = 0; pos < 9; pos++) {
+        //  convert pos to coordinate inside square
+        int posx = pos % 3 + cellx;
+        int posy = pos / 3 + celly;
+        if (posy != g.y && posx != g.x && g.board[posy][posx] == n) {
+            is_valid = false;
+            //g.valid[posy][posx] = false;
+        }
+    }
+    
+    if (is_valid) {
+        hide_banner();
+        g.valid[g.y][g.x] = true;
+    } else {
+        g.valid[g.y][g.x] = false;
+        show_banner("Invalid entry. Repeated number");
+    }
+    show_cursor();
+    
+    //TODO: Remake check so that all row, column or square turns red and is cleared accordingly
+}
+
+/*
+ * Undo last user's change
+ */
+
+void undo_last(void)
+{
+    if (g.has_undo && !g.is_won) {
+        g.y = g.undo_y;
+        g.x = g.undo_x;
+        g.has_undo = false;
+        if (g.undo_value == 0)
+            clear_number();
+        else
+            change_number(g.undo_value);
+    }
+}
+
+/*
+ * Display a clock with time elapsed since current game started
+ */
+
+void show_time(void)
+{
+    if (g.show_time) {
+        char s[20];
+        if (!g.is_won)
+            g.end_time = time(NULL);
+        int elapsed = g.end_time - g.start_time;
+        int seconds = elapsed % 60;
+        elapsed /= 60;
+        int minutes = elapsed % 60;
+        elapsed /= 60;
+        int hours = elapsed;
+       
+        sprintf(s, "%d:%02d:%02d", hours, minutes, seconds);
+        mvaddstr(g.top - 2, g.left, s);
+    } else {
+        mvaddstr(g.top - 2, g.left, "                   ");
+    }
+}
 
 /*
  * Draw's the game's board.
@@ -308,12 +597,12 @@ draw_logo(void)
         attron(COLOR_PAIR(PAIR_LOGO));
 
     // draw logo
-    mvaddstr(top + 0, left, "               _       _          ");
-    mvaddstr(top + 1, left, "              | |     | |         ");
-    mvaddstr(top + 2, left, " ___ _   _  __| | ___ | | ___   _ ");
-    mvaddstr(top + 3, left, "/ __| | | |/ _` |/ _ \\| |/ / | | |");
-    mvaddstr(top + 4, left, "\\__ \\ |_| | (_| | (_) |   <| |_| |");
-    mvaddstr(top + 5, left, "|___/\\__,_|\\__,_|\\___/|_|\\_\\\\__,_|");
+    mvaddstr(top + 0, left, "                 .___      __          ");
+    mvaddstr(top + 1, left, "  ________ __  __| _/____ |  | ____ __ ");
+    mvaddstr(top + 2, left, " /  ___/  |  \\/ __ |/  _ \\|  |/ /  |  \\");
+    mvaddstr(top + 3, left, " \\___ \\|  |  / /_/ (  <_> )    <|  |  /");
+    mvaddstr(top + 4, left, "/____  >____/\\____ |\\____/|__|_ \\____/ ");
+    mvaddstr(top + 5, left, "     \\/           \\/           \\/      ");
 
     // sign logo
     char signature[3+strlen(AUTHOR)+1];
@@ -339,10 +628,28 @@ draw_numbers(void)
     {
         for (int j = 0; j < 9; j++)
         {
+            short attrpair = 0;
+            if (has_colors()) {
+                if (g.is_won)
+                    attrpair = COLOR_PAIR(PAIR_NUMBER_WON);
+                else if (g.valid[i][j] == false)
+                    attrpair = COLOR_PAIR(PAIR_NUMBER_INVALID);
+                else if (g.blocked[i][j] == false)
+                    attrpair = COLOR_PAIR(PAIR_NUMBER_USER);
+                else
+                    attrpair = COLOR_PAIR(PAIR_GRID);
+                
+                attron(attrpair);
+            }
+            
             // determine char
             char c = (g.board[i][j] == 0) ? '.' : g.board[i][j] + '0';
             mvaddch(g.top + i + 1 + i/3, g.left + 2 + 2*(j + j/3), c);
             refresh();
+
+            if (has_colors() && attrpair != 0) {
+                attroff(attrpair);
+            }
         }
     }
 }
@@ -421,6 +728,13 @@ load_board(void)
 
     // w00t
     fclose(fp);
+    
+    for (int i = 0; i < 9; i++) {
+        for (int j = 0; j < 9; j++) {
+            g.blocked[i][j] = ( g.board[i][j] != 0 );
+            g.valid[i][j] = true;
+        }
+    }
     return true;
 }
 
@@ -489,21 +803,38 @@ restart_game(void)
     if (!load_board())
         return false;
 
+    // game has just started, not won
+    g.is_won = false;
+
+    // keep track of the time the game has been started
+    g.start_time = time(NULL);
+
     // redraw board
     draw_grid();
     draw_numbers();
+    show_time();
 
     // get window's dimensions
     int maxy, maxx;
     getmaxyx(stdscr, maxy, maxx);
 
+    // hide preview messages
+    hide_banner();
+    
     // move cursor to board's center
     g.y = g.x = 4;
     show_cursor();
 
     // remove log, if any
     remove("log.txt");
-
+    
+   
+    // initialize undo data
+    g.has_undo = false;
+    g.undo_value = -1;
+    g.undo_y = -1;
+    g.undo_x = -1;
+    
     // w00t
     return true;
 }
@@ -578,7 +909,10 @@ startup(void)
         if (init_pair(PAIR_BANNER, FG_BANNER, BG_BANNER) == ERR ||
             init_pair(PAIR_GRID, FG_GRID, BG_GRID) == ERR ||
             init_pair(PAIR_BORDER, FG_BORDER, BG_BORDER) == ERR ||
-            init_pair(PAIR_LOGO, FG_LOGO, BG_LOGO) == ERR)
+            init_pair(PAIR_LOGO, FG_LOGO, BG_LOGO) == ERR ||
+            init_pair(PAIR_NUMBER_WON, FG_NUMBER_WON, BG_NUMBER_WON) == ERR ||
+            init_pair(PAIR_NUMBER_INVALID, FG_NUMBER_INVALID, BG_NUMBER_INVALID) == ERR ||
+            init_pair(PAIR_NUMBER_USER, FG_NUMBER_USER, BG_NUMBER_USER) == ERR)
         {
             endwin();
             return false;
